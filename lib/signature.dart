@@ -55,9 +55,12 @@ class SignatureState extends State<Signature> {
       child: Container(
         decoration: BoxDecoration(color: widget.backgroundColor),
         child: Listener(
-          onPointerDown: (PointerDownEvent event) => _addPoint(event, PointType.tap),
-          onPointerUp: (PointerUpEvent event) => _addPoint(event, PointType.tap),
-          onPointerMove: (PointerMoveEvent event) => _addPoint(event, PointType.move),
+          onPointerDown: (PointerDownEvent event) =>
+              _addPoint(event, PointType.tap),
+          onPointerUp: (PointerUpEvent event) =>
+              _addPoint(event, PointType.tap),
+          onPointerMove: (PointerMoveEvent event) =>
+              _addPoint(event, PointType.move),
           child: RepaintBoundary(
             child: CustomPaint(
               painter: _SignaturePainter(widget.controller),
@@ -77,7 +80,10 @@ class SignatureState extends State<Signature> {
     if (widget.width != null || widget.height != null) {
       //IF DOUNDARIES ARE DEFINED, USE LIMITED BOX
       return Center(
-          child: LimitedBox(maxWidth: maxWidth, maxHeight: maxHeight, child: signatureCanvas));
+          child: LimitedBox(
+              maxWidth: maxWidth,
+              maxHeight: maxHeight,
+              child: signatureCanvas));
     } else {
       //IF NO BOUNDARIES ARE DEFINED, USE EXPANDED
       return Expanded(child: signatureCanvas);
@@ -92,6 +98,10 @@ class SignatureState extends State<Signature> {
       // IF USER LEFT THE BOUNDARY AND AND ALSO RETURNED BACK
       // IN ONE MOVE, RETYPE IT AS TAP, AS WE DO NOT WANT TO
       // LINK IT WITH PREVIOUS POINT
+
+      if (event is PointerDownEvent) {
+        widget.controller.addStroke();
+      }
 
       PointType t = type;
       if (_isOutsideDrawField) {
@@ -143,23 +153,34 @@ class _SignaturePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final List<Point> points = _controller.value;
-    if (points == null || points.isEmpty) {
+    final List<List<Point>> strokes = _controller.value;
+    final Curve curve = _controller.curve;
+
+    if (strokes == null || strokes.isEmpty) {
       return;
     }
-    for (int i = 0; i < (points.length - 1); i++) {
-      if (points[i + 1].type == PointType.move) {
-        canvas.drawLine(
-          points[i].offset,
-          points[i + 1].offset,
-          _penStyle,
-        );
-      } else {
-        canvas.drawCircle(
-          points[i].offset,
-          _penStyle.strokeWidth / 2,
-          _penStyle,
-        );
+
+    for (List<Point> points in strokes) {
+      for (int i = 0; i < (points.length - 1); i++) {
+        final double midLength = points.length / 2;
+        final double arcLength = midLength - (points.length / 2 - i).abs();
+        final double strokeWidth =
+            _controller.penStrokeWidth * curve.transform(arcLength / midLength);
+        _penStyle.strokeWidth = strokeWidth;
+
+        if (points[i + 1].type == PointType.move) {
+          canvas.drawLine(
+            points[i].offset,
+            points[i + 1].offset,
+            _penStyle,
+          );
+        } else {
+          canvas.drawCircle(
+            points[i].offset,
+            _penStyle.strokeWidth / 2,
+            _penStyle,
+          );
+        }
       }
     }
   }
@@ -171,14 +192,16 @@ class _SignaturePainter extends CustomPainter {
 /// class for interaction with signature widget
 /// manages points representing signature on canvas
 /// provides signature manipulation functions (export, clear)
-class SignatureController extends ValueNotifier<List<Point>> {
+class SignatureController extends ValueNotifier<List<List<Point>>> {
   /// constructor
   SignatureController(
       {List<Point> points,
       this.penColor = Colors.black,
       this.penStrokeWidth = 3.0,
+      this.taperFactor = 1.0,
+      this.curve = Curves.linear,
       this.exportBackgroundColor})
-      : super(points ?? <Point>[]);
+      : super(points ?? <List<Point>>[]);
 
   /// color of a signature line
   final Color penColor;
@@ -186,20 +209,31 @@ class SignatureController extends ValueNotifier<List<Point>> {
   /// boldness of a signature line
   final double penStrokeWidth;
 
+  /// Stoke taper factor of a signature line
+  final double taperFactor;
+
+  /// Stoke curve function
+  final Curve curve;
+
   /// background color to be used in exported png image
   final Color exportBackgroundColor;
 
-  /// getter for points representing signature on 2D canvas
-  List<Point> get points => value;
+  /// getter for stokes representing signature on 2D canvas
+  List<List<Point>> get strokes => value;
 
-  /// setter for points representing signature on 2D canvas
-  set points(List<Point> points) {
-    value = points.toList();
+  /// setter for stokes representing signature on 2D canvas
+  set strokes(List<List<Point>> strokes) {
+    value = strokes.toList();
+  }
+
+  /// add new stroke
+  void addStroke() {
+    value.add(<Point>[]);
   }
 
   /// add point to point collection
   void addPoint(Point point) {
-    value.add(point);
+    value[value.length - 1].add(point);
     notifyListeners();
   }
 
@@ -215,7 +249,7 @@ class SignatureController extends ValueNotifier<List<Point>> {
 
   /// clear the canvas
   void clear() {
-    value = <Point>[];
+    value = <List<Point>>[];
   }
 
   /// convert to
@@ -226,18 +260,20 @@ class SignatureController extends ValueNotifier<List<Point>> {
 
     double minX = double.infinity, minY = double.infinity;
     double maxX = 0, maxY = 0;
-    for (Point point in points) {
-      if (point.offset.dx < minX) {
-        minX = point.offset.dx;
-      }
-      if (point.offset.dy < minY) {
-        minY = point.offset.dy;
-      }
-      if (point.offset.dx > maxX) {
-        maxX = point.offset.dx;
-      }
-      if (point.offset.dy > maxY) {
-        maxY = point.offset.dy;
+    for (List<Point> points in strokes) {
+      for (Point point in points) {
+        if (point.offset.dx < minX) {
+          minX = point.offset.dx;
+        }
+        if (point.offset.dy < minY) {
+          minY = point.offset.dy;
+        }
+        if (point.offset.dx > maxX) {
+          maxX = point.offset.dx;
+        }
+        if (point.offset.dy > maxY) {
+          maxY = point.offset.dy;
+        }
       }
     }
 
@@ -250,8 +286,8 @@ class SignatureController extends ValueNotifier<List<Point>> {
     }
     _SignaturePainter(this).paint(canvas, null);
     final ui.Picture picture = recorder.endRecording();
-    return picture.toImage(
-        (maxX - minX + penStrokeWidth * 2).toInt(), (maxY - minY + penStrokeWidth * 2).toInt());
+    return picture.toImage((maxX - minX + penStrokeWidth * 2).toInt(),
+        (maxY - minY + penStrokeWidth * 2).toInt());
   }
 
   /// convert canvas to dart:ui Image and then to PNG represented in Uint8List
@@ -261,7 +297,8 @@ class SignatureController extends ValueNotifier<List<Point>> {
       if (image == null) {
         return null;
       }
-      final ByteData bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      final ByteData bytes =
+          await image.toByteData(format: ui.ImageByteFormat.png);
       return bytes.buffer.asUint8List();
     } else {
       return _toPngBytesForWeb();
@@ -274,7 +311,8 @@ class SignatureController extends ValueNotifier<List<Point>> {
     if (isEmpty) {
       return null;
     }
-    final int pColor = img.getColor(penColor.red, penColor.green, penColor.blue);
+    final int pColor =
+        img.getColor(penColor.red, penColor.green, penColor.blue);
 
     final Color backgroundColor = exportBackgroundColor ?? Colors.transparent;
     final int bColor = img.getColor(backgroundColor.red, backgroundColor.green,
@@ -285,19 +323,25 @@ class SignatureController extends ValueNotifier<List<Point>> {
     double minY = double.infinity;
     double maxY = 0;
 
-    for (Point point in points) {
-      minX = min(point.offset.dx, minX);
-      maxX = max(point.offset.dx, maxX);
-      minY = min(point.offset.dy, minY);
-      maxY = max(point.offset.dy, maxY);
+    for (List<Point> points in strokes) {
+      for (Point point in points) {
+        minX = min(point.offset.dx, minX);
+        maxX = max(point.offset.dx, maxX);
+        minY = min(point.offset.dy, minY);
+        maxY = max(point.offset.dy, maxY);
+      }
     }
 
     //point translation
     final List<Point> translatedPoints = <Point>[];
-    for (Point point in points) {
-      translatedPoints.add(Point(
-          Offset(point.offset.dx - minX + penStrokeWidth, point.offset.dy - minY + penStrokeWidth),
-          point.type));
+
+    for (List<Point> points in strokes) {
+      for (Point point in points) {
+        translatedPoints.add(Point(
+            Offset(point.offset.dx - minX + penStrokeWidth,
+                point.offset.dy - minY + penStrokeWidth),
+            point.type));
+      }
     }
 
     final int width = (maxX - minX + penStrokeWidth * 2).toInt();
@@ -322,8 +366,12 @@ class SignatureController extends ValueNotifier<List<Point>> {
             thickness: penStrokeWidth);
       } else {
         // draw the point to the image
-        img.fillCircle(signatureImage, translatedPoints[i].offset.dx.toInt(),
-            translatedPoints[i].offset.dy.toInt(), penStrokeWidth.toInt(), pColor);
+        img.fillCircle(
+            signatureImage,
+            translatedPoints[i].offset.dx.toInt(),
+            translatedPoints[i].offset.dy.toInt(),
+            penStrokeWidth.toInt(),
+            pColor);
       }
     }
     // encode the image to PNG
